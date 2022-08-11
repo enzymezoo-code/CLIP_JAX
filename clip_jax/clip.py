@@ -81,7 +81,7 @@ def convert_params(torch_state, jax_params):
     def name_iter(pytree, root, f):
         new_out = {}
         for k, v in pytree.items():
-            if isinstance(v, FlatMapping):
+            if isinstance(v, (FlatMapping, dict)):
                 new_out[k] = name_iter(v, root + "/" + k, f)
             else:
                 new_out[k] = f(v, root + "/" + k)
