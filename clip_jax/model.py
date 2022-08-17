@@ -29,8 +29,6 @@ class AttentionPool2d(hk.Module):
 
     def __call__(self, x):
         N, C, H, W = x.shape
-        # NHWC -> (HW) NC
-        #x = x.reshape(N, H * W, C).transpose(0, 1, 2)
         x = x.reshape(N, C, H * W).transpose(2, 0, 1)  # NCHW -> (HW)NC
         n = x.mean(axis=0, keepdims=True)
         x = jax.numpy.concatenate([n, x], axis=0)  # (HW+1)NC

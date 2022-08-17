@@ -79,11 +79,6 @@ def available_models() -> List[str]:
 
 def load_weights_rn50(state_dict, pytree):
 
-    atom_map_r = {
-        'weight': 'w',
-        'bias': 'b' ,
-    }
-
     atom_map = {}
     atom_map['w'] = 'weight'
     atom_map['b'] = 'bias'
@@ -93,9 +88,6 @@ def load_weights_rn50(state_dict, pytree):
     atom_map['key'] = 'k_proj'
     atom_map['value'] = 'v_proj'
     atom_map['linear'] = 'c_proj'
-
-    stem_path = "/visual"
-    j = 0
 
     for key in pytree.keys():
         if 'visual' in key:
@@ -108,11 +100,8 @@ def load_weights_rn50(state_dict, pytree):
                     if len(state_dict[ind].shape) == 4:
                         new_val = jnp.array(state_dict[ind], dtype=jnp.float32).transpose([2, 3, 1, 0])
                     else:
-                        
                         new_val = jnp.array(state_dict[ind], dtype=jnp.float32)
-               
                         new_val = new_val.reshape(value.shape)
-                     
                     pytree[key][sub_layer] = new_val
             # bottleneck weights            
             if '_make_layer' in key and 'downsample' not in key:
@@ -141,7 +130,6 @@ def load_weights_rn50(state_dict, pytree):
                     state_dict_key_base  += '0.'
                 elif 'downsample_bn' in key:
                     state_dict_key_base  += '1.'
-
                 for sub_layer, value in pytree[key].items():
                     ind = state_dict_key_base + atom_map[sub_layer] 
                     if len(state_dict[ind].shape) == 4:
@@ -167,7 +155,6 @@ def load_weights_rn50(state_dict, pytree):
                         else:
                             new_val = jnp.array(state_dict[ind], dtype=jnp.float32).reshape(value.shape)
                         pytree[key][sub_layer] = new_val
-    return j
         
 def convert_params(torch_state, jax_params, rn=False):
     def name_iter(pytree, root, f):

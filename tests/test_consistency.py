@@ -31,7 +31,7 @@ def test_model(model_name):
 
     print(f"{model_name}: done!")
 
-#test_model("ViT-B/32")
-#test_model("ViT-B/16")
-#test_model("ViT-L/14")
+test_model("ViT-B/32")
+test_model("ViT-B/16")
+test_model("ViT-L/14")
 test_model("RN50")
