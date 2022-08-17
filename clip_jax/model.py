@@ -4,6 +4,161 @@ import jax.numpy as jnp
 import numpy as np
 from haiku import LayerNorm
 
+def create_bn(name):
+    init = hk.initializers.RandomUniform()
+    return hk.BatchNorm(True, True, 0.1, scale_init=init, offset_init=init, name=name, data_format="NCHW")
+
+class PositionalEmbedding(hk.Module):
+    def __init__(self, spacial_dim, embed_dim):
+        super().__init__(name="pos_e")
+        self.positional_embedding = hk.get_parameter("pos_embd", (spacial_dim ** 2 + 1, embed_dim), init=hk.initializers.RandomNormal())
+    def __call__(self, x):
+        return x + self.positional_embedding[:, None, :]
+
+class AttentionPool2d(hk.Module):
+    def __init__(self, spacial_dim: int, embed_dim: int, num_heads: int, output_dim: int = None):
+        super().__init__(name="attnpool")
+        self.pe = PositionalEmbedding(spacial_dim, embed_dim)
+        self.num_heads = num_heads
+        self.mha = hk.MultiHeadAttention(num_heads, 
+        embed_dim // num_heads, 
+        w_init_scale=0.1, 
+        value_size=None, 
+        model_size=output_dim or embed_dim, 
+        name="mha")
+
+    def __call__(self, x):
+        N, C, H, W = x.shape
+        # NHWC -> (HW) NC
+        #x = x.reshape(N, H * W, C).transpose(0, 1, 2)
+        x = x.reshape(N, C, H * W).transpose(2, 0, 1)  # NCHW -> (HW)NC
+        n = x.mean(axis=0, keepdims=True)
+        x = jax.numpy.concatenate([n, x], axis=0)  # (HW+1)NC
+        x = self.pe(x).transpose(1, 0, 2)
+        x = self.mha(x[:1], x, x)
+        return x
+
+class Bottleneck(hk.Module):
+    expansion = 4
+
+    def __init__(self, inplanes, planes, stride=1, layer_num=0, num=0):
+        super().__init__(name=f'layer_{layer_num}_{num}')
+
+        # all conv layers have stride 1. an avgpool is performed after the second convolution when stride > 1
+        self.conv1 = hk.Conv2D(planes, kernel_shape=(1, 1), stride=1, padding="SAME", with_bias=False, name="conv1", data_format="NCHW")
+        self.bn1 = create_bn(name="bn1")
+        self.conv2 = hk.Conv2D(planes, kernel_shape=(3, 3), stride=1, padding="SAME", with_bias=False, name="conv2", data_format="NCHW")
+        self.bn2 = create_bn(name="bn2")
+        self.avgpool = hk.AvgPool(stride, stride, padding="SAME", channel_axis=1) if stride > 1 else None
+        self.conv3 = hk.Conv2D(planes * self.expansion, kernel_shape=(1, 1), stride=1, padding="SAME", with_bias=False, name="conv3", data_format="NCHW")
+        self.bn3 = create_bn(name="bn3")
+        self.downsample = None
+        self.stride = stride
+
+        if stride > 1 or inplanes != planes * Bottleneck.expansion:
+            # downsampling layer is prepended with an avgpool, and the subsequent convolution has stride 1
+            self.downsample = hk.Sequential([
+                hk.AvgPool(stride, stride, padding="SAME", channel_axis=1),
+                hk.Conv2D(planes * self.expansion, kernel_shape=(1, 1), stride=1, with_bias=False, name="downsample_conv", data_format="NCHW")
+            ]
+            )
+            self.downsample_bn = hk.BatchNorm(True, True, 0.1, name="downsample_bn", data_format="NCHW")
+        
+
+    def __call__(self, x):
+        identity = x
+        out = jax.nn.relu(self.bn1(self.conv1(x), True))
+        out = jax.nn.relu(self.bn2(self.conv2(out), True))
+        if self.stride > 1:
+            out = self.avgpool(out)
+        out = self.bn3(self.conv3(out), True)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+            identity = self.downsample_bn(identity, True)
+        
+        out += identity
+        out = jax.nn.relu(out)
+        return out
+
+
+@hk.transparent
+class ModifiedResNet(hk.Module):
+    """
+    A ResNet class that is similar to torchvision's but contains the following changes:
+    - There are now 3 "stem" convolutions as opposed to 1, with an average pool instead of a max pool.
+    - Performs anti-aliasing strided convolutions, where an avgpool is prepended to convolutions with stride > 1
+    - The final pooling layer is a QKV attention instead of an average pool
+    """
+
+    def __init__(self, layers, output_dim, heads, input_resolution=224, width=64, name=None):
+        super().__init__(name="visual")
+        self.output_dim = output_dim
+        self.input_resolution = input_resolution
+
+        # the 3-layer stem
+        self.conv1 = hk.Conv2D(width // 2, 
+            kernel_shape=(3, 3), 
+            stride=(2, 2), 
+            padding="SAME", 
+            with_bias=False, 
+            name="conv1", data_format="NCHW")
+        self.bn1 = create_bn(name="bn1")
+
+        self.conv2 = hk.Conv2D(width // 2, 
+            kernel_shape=(3, 3), 
+            stride=(1, 1), 
+            padding="SAME", 
+            with_bias=False,
+            name="conv2", data_format="NCHW")
+        self.bn2 = create_bn(name="bn2")
+
+        self.conv3 = hk.Conv2D(width,
+            kernel_shape=(3, 3), 
+            stride=(1, 1), 
+            padding="SAME",
+            with_bias=False,
+            name="conv3", data_format="NCHW")
+        self.bn3 = create_bn(name="bn3")
+
+        self.avgpool = hk.AvgPool(2, 2, padding="SAME", channel_axis=1)
+
+        # residual layers
+        self._inplanes = width  # this is a *mutable* variable used during construction
+        self.layer1 = self._make_layer(width, layers[0], layer_num=1)
+        self.layer2 = self._make_layer(width * 2, layers[1], stride=2, layer_num=2)
+        self.layer3 = self._make_layer(width * 4, layers[2], stride=2, layer_num=3)
+        self.layer4 = self._make_layer(width * 8, layers[3], stride=2, layer_num=4)
+
+        embed_dim = width * 32  # the ResNet feature dimension
+        self.attnpool = AttentionPool2d(input_resolution // 32, embed_dim, heads, output_dim)
+
+    def _make_layer(self, planes, blocks, stride=1, layer_num=0):
+        layers = [Bottleneck(self._inplanes, planes, stride, layer_num=layer_num, num=0)]
+
+        self._inplanes = planes * Bottleneck.expansion
+        for i in range(1, blocks):
+            layers.append(Bottleneck(self._inplanes, planes, layer_num=layer_num, num=i))
+
+        return hk.Sequential(layers)
+
+    def __call__(self, x):
+        def stem(x):
+            x = jax.nn.relu(self.bn1(self.conv1(x), True))
+            x = jax.nn.relu(self.bn2(self.conv2(x), True))
+            x = jax.nn.relu(self.bn3(self.conv3(x), True))
+            x = self.avgpool(x)
+            return x
+
+        #x = x.type(self.conv1.weight.dtype)
+        x = stem(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.attnpool(x)
+        return x
+
 class MultiHeadAttention(hk.Module):
     def __init__(
             self,
@@ -166,15 +321,25 @@ class CLIP(hk.Module):
 
         vision_heads = vision_width // 64
 
-        self.visual = VisualTransformer(
-            input_resolution=image_resolution,
-            patch_size=vision_patch_size,
-            width=vision_width,
-            layers=vision_layers,
-            heads=vision_heads,
-            output_dim=embed_dim,
-            name="visual"
-        )
+        if isinstance(vision_layers, (tuple, list)):
+            vision_heads = vision_width * 32 // 64
+            self.visual = ModifiedResNet(
+                layers=vision_layers,
+                output_dim=embed_dim,
+                heads=vision_heads,
+                input_resolution=image_resolution,
+                width=vision_width
+            )
+        else:
+            vision_heads = vision_width // 64
+            self.visual = VisualTransformer(
+                input_resolution=image_resolution,
+                patch_size=vision_patch_size,
+                width=vision_width,
+                layers=vision_layers,
+                heads=vision_heads,
+                output_dim=embed_dim
+            )
 
         self.transformer = Transformer(
             width=transformer_width,
@@ -250,7 +415,13 @@ def get_params(state_dict: dict):
         grid_size = round((state_dict["visual.positional_embedding"].shape[0] - 1) ** 0.5)
         image_resolution = vision_patch_size * grid_size
     else:
-        raise Exception("not implemented")
+        counts: list = [len(set(k.split(".")[2] for k in state_dict if k.startswith(f"visual.layer{b}"))) for b in [1, 2, 3, 4]]
+        vision_layers = tuple(counts)
+        vision_width = state_dict["visual.layer1.0.conv1.weight"].shape[0]
+        output_width = round((state_dict["visual.attnpool.positional_embedding"].shape[0] - 1) ** 0.5)
+        vision_patch_size = None
+        assert output_width ** 2 + 1 == state_dict["visual.attnpool.positional_embedding"].shape[0]
+        image_resolution = output_width * 32
 
     embed_dim = state_dict["text_projection"].shape[1]
     context_length = state_dict["positional_embedding"].shape[0]

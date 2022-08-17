@@ -4,9 +4,9 @@ import jax
 import time
 
 import clip_jax
-
-image_fn, text_fn, jax_params, jax_preprocess = clip_jax.load('ViT-B/32', "cpu")
-
+clip_jax.load('ViT-B/32', "cpu")
+#image_fn, text_fn, jax_params, jax_preprocess = clip_jax.load('ViT-B/32', "cpu")
+"""
 batch_size = 2048
 
 devices = jax.local_devices()
@@ -42,3 +42,4 @@ print(f"{total:.06}s for 16 batches@bs={batch_size} per core")
 print(f"{16*len(devices) * batch_size/total:.06} examples/s")
 
 print("done!")
+"""
