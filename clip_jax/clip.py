@@ -23,7 +23,6 @@ __all__ = ["available_models", "load", "tokenize"]
 _tokenizer = _Tokenizer()
 
 _MODELS = {
-    # only ViT is supported for now
     "RN50": "https://openaipublic.azureedge.net/clip/models/afeb0e10f9e5a86da6080e35cf09123aca3b358a0c3e3b6c78a7b63bc04b6762/RN50.pt",
     "ViT-B/32": "https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt",
     "ViT-B/16": "https://openaipublic.azureedge.net/clip/models/5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt",
@@ -95,8 +94,6 @@ def load_weights_rn50(state_dict, pytree):
     atom_map['value'] = 'v_proj'
     atom_map['linear'] = 'c_proj'
 
-    # load stem weights
-    #print(pytree.keys())
     stem_path = "/visual"
     j = 0
 
@@ -117,7 +114,6 @@ def load_weights_rn50(state_dict, pytree):
                         new_val = new_val.reshape(value.shape)
                      
                     pytree[key][sub_layer] = new_val
-                    #j += math.prod(new_val.shape)
             # bottleneck weights            
             if '_make_layer' in key and 'downsample' not in key:
                 layer_name = key.split('/')[-1]
@@ -134,7 +130,6 @@ def load_weights_rn50(state_dict, pytree):
                     else:
                         new_val = jnp.array(state_dict[ind], dtype=jnp.float32).reshape(value.shape)
                     pytree[key][sub_layer] = new_val
-                    #j += math.prod(new_val.shape)
             # downsample bottleneck weights
             if 'downsample' in key:
                 layer_name = key.split('/')[-1]
@@ -154,7 +149,6 @@ def load_weights_rn50(state_dict, pytree):
                     else:
                         new_val = jnp.array(state_dict[ind], dtype=jnp.float32).reshape(value.shape)
                     pytree[key][sub_layer] = new_val
-                    #j += math.prod(new_val.shape)
 
             # attnpool weights
             if 'attnpool' in key:
@@ -162,7 +156,6 @@ def load_weights_rn50(state_dict, pytree):
                     ind = 'visual.attnpool.positional_embedding'
                     new_val = jnp.array(state_dict[ind], dtype=jnp.float32)
                     pytree[key]['pos_embd'] = new_val
-                    #j += math.prod(new_val.shape)
                 else:
                     attn_layer_name = key.split('/')[-1]
                     state_dict_key_base = f'visual.attnpool.{atom_map[attn_layer_name]}.'
@@ -174,7 +167,6 @@ def load_weights_rn50(state_dict, pytree):
                         else:
                             new_val = jnp.array(state_dict[ind], dtype=jnp.float32).reshape(value.shape)
                         pytree[key][sub_layer] = new_val
-                        #j += math.prod(new_val.shape)
     return j
         
 def convert_params(torch_state, jax_params, rn=False):
