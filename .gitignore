@@ -9,3 +9,4 @@ venv/
 thumbs.db
 .DS_Store
 .idea
+.vscode

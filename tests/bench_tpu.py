@@ -4,9 +4,7 @@ import jax
 import time
 
 import clip_jax
-
-image_fn, text_fn, jax_params, jax_preprocess = clip_jax.load('ViT-B/32', "cpu")
-
+clip_jax.load('ViT-B/32', "cpu")
 batch_size = 2048
 
 devices = jax.local_devices()
