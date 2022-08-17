@@ -338,7 +338,8 @@ class CLIP(hk.Module):
                 width=vision_width,
                 layers=vision_layers,
                 heads=vision_heads,
-                output_dim=embed_dim
+                output_dim=embed_dim,
+                name="visual"
             )
 
         self.transformer = Transformer(

@@ -181,7 +181,13 @@ def convert_params(torch_state, jax_params, rn=False):
     def name_iter(pytree, root, f):
         new_out = {}
         for k, v in pytree.items():
-            if rn and 'visual' not in k:
+            if rn:
+                if 'visual' not in k:
+                    if isinstance(v, dict):
+                        new_out[k] = name_iter(v, root + "/" + k, f)
+                    else:
+                        new_out[k] = f(v, root + "/" + k)
+            else:
                 if isinstance(v, dict):
                     new_out[k] = name_iter(v, root + "/" + k, f)
                 else:
@@ -250,15 +256,13 @@ def load(name: str, device: Union[str, torch.device] = "cpu", jit=True):
     """
 
     rn = "RN" in name
-    
+
     if name in _MODELS:
         model_path = _download(_MODELS[name])
     elif os.path.isfile(name):
         model_path = name
     else:
-        raise RuntimeError(f"Model {name} not found; available models = {available_models()}")
-
-    
+        raise RuntimeError(f"Model {name} not found; available models = {available_models()}")    
     try:
         # loading JIT archive
         state_dict = torch.jit.load(model_path, map_location=device if jit else "cpu").eval().state_dict()
@@ -290,7 +294,8 @@ def load(name: str, device: Union[str, torch.device] = "cpu", jit=True):
         jax_params[key] = new_jax_params[key]
         
     # load rn50 weights (todo integrate into convert_params)
-    load_weights_rn50(state_dict, jax_params)
+    if rn:
+        load_weights_rn50(state_dict, jax_params)
     
     image_fn = hk.without_apply_rng(hk.transform_with_state(vit_jax)).apply
     text_fn = hk.without_apply_rng(hk.transform_with_state(text_jax)).apply
